@@ -1,0 +1,11 @@
+[package]
+name = "cam_viewer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.31"
+nokhwa = { version = "0.10", features = ["input-native"] }
+
+[profile.release]
+opt-level = 3
