@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{
-    ApiBackend, CameraFormat, CameraIndex, RequestedFormat, RequestedFormatType,
+    ApiBackend, CameraFormat, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType,
 };
 use nokhwa::{query, Camera, NokhwaError};
 
@@ -115,15 +115,50 @@ fn open_camera(
     let req = RequestedFormat::new::<RgbFormat>(req_ty);
     let mut cam = Camera::new(CameraIndex::Index(index), req)?;
 
-    // このデバイスが実際に出力できる組み合わせだけを列挙し、解像度→FPS の降順に並べる。
-    let mut formats = cam.compatible_camera_formats().unwrap_or_default();
-    formats.sort_by(|a, b| {
-        let area_a = a.resolution().width() as u64 * a.resolution().height() as u64;
-        let area_b = b.resolution().width() as u64 * b.resolution().height() as u64;
-        (area_b, b.frame_rate()).cmp(&(area_a, a.frame_rate()))
-    });
+    let raw = cam.compatible_camera_formats().unwrap_or_default();
+    let formats = dedup_and_sort_formats(raw);
 
     cam.open_stream()?;
     let current = cam.camera_format();
     Ok((cam, formats, current))
+}
+
+/// 同じ (解像度, FPS) でピクセル形式違いの組合せが多数並ぶと選びにくいので、
+/// 1 組につき 1 つだけ残す。優先順位はデコード相性と高 FPS 実現性で決める。
+fn dedup_and_sort_formats(formats: Vec<CameraFormat>) -> Vec<CameraFormat> {
+    use std::collections::HashMap;
+    let mut best: HashMap<(u32, u32, u32), CameraFormat> = HashMap::new();
+    for f in formats {
+        let key = (
+            f.resolution().width(),
+            f.resolution().height(),
+            f.frame_rate(),
+        );
+        let take = match best.get(&key) {
+            Some(cur) => rank_pixel_format(f.format()) < rank_pixel_format(cur.format()),
+            None => true,
+        };
+        if take {
+            best.insert(key, f);
+        }
+    }
+    let mut out: Vec<CameraFormat> = best.into_values().collect();
+    out.sort_by(|a, b| {
+        let area_a = a.resolution().width() as u64 * a.resolution().height() as u64;
+        let area_b = b.resolution().width() as u64 * b.resolution().height() as u64;
+        (area_b, b.frame_rate()).cmp(&(area_a, a.frame_rate()))
+    });
+    out
+}
+
+/// 小さいほど優先。MJPEG は USB カメラで高解像度・高 FPS をサポートしやすいので最優先。
+fn rank_pixel_format(f: FrameFormat) -> u8 {
+    match f {
+        FrameFormat::MJPEG => 0,
+        FrameFormat::YUYV => 1,
+        FrameFormat::NV12 => 2,
+        FrameFormat::GRAY => 3,
+        FrameFormat::RAWRGB => 4,
+        FrameFormat::RAWBGR => 5,
+    }
 }

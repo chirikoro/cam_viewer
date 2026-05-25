@@ -12,6 +12,10 @@ pub struct CamViewerApp {
     selected_device: u32,
     formats: Vec<CameraFormat>,
     selected_format: Option<CameraFormat>,
+    // 直前にユーザーが要求したフォーマット。Closest で別物に置き換わった時に
+    // 「要求 vs 実際」の差分を提示するために使う。
+    last_requested: Option<CameraFormat>,
+    status: Option<String>,
     settings_open: bool,
     fullscreen: bool,
     last_error: Option<String>,
@@ -40,6 +44,8 @@ impl CamViewerApp {
             selected_device,
             formats: Vec::new(),
             selected_format: None,
+            last_requested: None,
+            status: Some("カメラを開いています…".to_owned()),
             settings_open: false,
             fullscreen: false,
             last_error: None,
@@ -77,6 +83,8 @@ impl CamViewerApp {
                                 self.selected_device = *idx;
                                 self.selected_format = None;
                                 self.formats.clear();
+                                self.last_requested = None;
+                                self.status = Some(format!("『{}』を開いています…", name));
                                 let _ = self.cmd_tx.send(CamCommand::Open {
                                     index: *idx,
                                     format: None,
@@ -85,7 +93,8 @@ impl CamViewerApp {
                         }
                     });
 
-                // 解像度・FPS 選択（接続カメラが対応する組み合わせのみ）
+                // 解像度・FPS 選択（接続カメラが対応する組み合わせのみ。
+                // 同じ解像度・FPS でピクセル形式違いの重複は内部で集約済み）
                 let formats = self.formats.clone();
                 let fmt_label = self
                     .selected_format
@@ -97,7 +106,9 @@ impl CamViewerApp {
                         for f in &formats {
                             let selected = self.selected_format == Some(*f);
                             if ui.selectable_label(selected, fmt_to_string(*f)).clicked() {
-                                self.selected_format = Some(*f);
+                                self.last_requested = Some(*f);
+                                self.status =
+                                    Some(format!("要求中: {} …", fmt_to_string(*f)));
                                 let _ = self.cmd_tx.send(CamCommand::Open {
                                     index: self.selected_device,
                                     format: Some(*f),
@@ -106,6 +117,15 @@ impl CamViewerApp {
                         }
                     });
 
+                // 現在カメラに実際に適用されているフォーマット（ピクセル形式まで含めて表示）
+                if let Some(cur) = self.selected_format {
+                    ui.label(format!(
+                        "現在のフォーマット: {} ({:?})",
+                        fmt_to_string(cur),
+                        cur.format()
+                    ));
+                }
+
                 // 全画面表示
                 let mut fs = self.fullscreen;
                 if ui.checkbox(&mut fs, "全画面表示").changed() {
@@ -113,10 +133,13 @@ impl CamViewerApp {
                 }
 
                 ui.separator();
-                ui.label("右クリックで設定の開閉 / F11 で全画面");
+                if let Some(s) = &self.status {
+                    ui.label(s);
+                }
                 if let Some(err) = &self.last_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, format!("エラー: {err}"));
                 }
+                ui.label("右クリックで設定の開閉 / F11 で全画面");
             });
         self.settings_open = open;
     }
@@ -138,6 +161,18 @@ impl eframe::App for CamViewerApp {
                         self.formats = formats;
                         self.selected_format = Some(current);
                         self.last_error = None;
+                        let req = self.last_requested.take();
+                        self.status = Some(match req {
+                            Some(r) if r == current => {
+                                format!("適用しました: {}", fmt_to_string(current))
+                            }
+                            Some(r) => format!(
+                                "『{}』はこのカメラで使えないため『{}』を適用しました",
+                                fmt_to_string(r),
+                                fmt_to_string(current)
+                            ),
+                            None => format!("適用中: {}", fmt_to_string(current)),
+                        });
                     }
                 }
                 CamEvent::Error(e) => self.last_error = Some(e),
