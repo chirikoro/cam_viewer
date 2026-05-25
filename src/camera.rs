@@ -1,6 +1,6 @@
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nokhwa::pixel_format::RgbFormat;
 use nokhwa::utils::{
@@ -30,6 +30,8 @@ pub enum CamEvent {
         formats: Vec<CameraFormat>,
         current: CameraFormat,
     },
+    /// 取得スレッドが直近 1 秒間に受け取ったフレーム数から算出した実測 FPS。
+    MeasuredFps(f32),
     Error(String),
 }
 
@@ -60,6 +62,8 @@ pub fn spawn_capture() -> (Sender<CamCommand>, Receiver<CamEvent>) {
 fn capture_loop(cmd_rx: Receiver<CamCommand>, evt_tx: Sender<CamEvent>) {
     // Camera は COM/V4L のハンドルを握るためこのスレッド内だけで生成・保持する。
     let mut camera: Option<Camera> = None;
+    let mut frame_count: u32 = 0;
+    let mut last_fps_report = Instant::now();
 
     loop {
         // 溜まっている命令をすべて処理（解像度/カメラ切替に素早く反応するため）。
@@ -71,6 +75,9 @@ fn capture_loop(cmd_rx: Receiver<CamCommand>, evt_tx: Sender<CamEvent>) {
                         Ok((cam, formats, current)) => {
                             let _ = evt_tx.send(CamEvent::Formats { index, formats, current });
                             camera = Some(cam);
+                            // FPS 計測カウンタをリセット
+                            frame_count = 0;
+                            last_fps_report = Instant::now();
                         }
                         Err(e) => {
                             let _ = evt_tx.send(CamEvent::Error(e.to_string()));
@@ -92,6 +99,14 @@ fn capture_loop(cmd_rx: Receiver<CamCommand>, evt_tx: Sender<CamEvent>) {
                         height,
                         rgb: img.into_raw(),
                     }));
+                    frame_count += 1;
+                    let elapsed = last_fps_report.elapsed();
+                    if elapsed >= Duration::from_secs(1) {
+                        let fps = frame_count as f32 / elapsed.as_secs_f32();
+                        let _ = evt_tx.send(CamEvent::MeasuredFps(fps));
+                        frame_count = 0;
+                        last_fps_report = Instant::now();
+                    }
                 }
                 Err(e) => {
                     let _ = evt_tx.send(CamEvent::Error(e.to_string()));

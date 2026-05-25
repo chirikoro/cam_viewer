@@ -16,6 +16,8 @@ pub struct CamViewerApp {
     // 「要求 vs 実際」の差分を提示するために使う。
     last_requested: Option<CameraFormat>,
     status: Option<String>,
+    // 取得スレッドが計測した実測 FPS（カメラが申告する値とは別の、実際のフレームレート）
+    measured_fps: Option<f32>,
     settings_open: bool,
     fullscreen: bool,
     last_error: Option<String>,
@@ -46,6 +48,7 @@ impl CamViewerApp {
             selected_format: None,
             last_requested: None,
             status: Some("カメラを開いています…".to_owned()),
+            measured_fps: None,
             settings_open: false,
             fullscreen: false,
             last_error: None,
@@ -84,6 +87,7 @@ impl CamViewerApp {
                                 self.selected_format = None;
                                 self.formats.clear();
                                 self.last_requested = None;
+                                self.measured_fps = None;
                                 self.status = Some(format!("『{}』を開いています…", name));
                                 let _ = self.cmd_tx.send(CamCommand::Open {
                                     index: *idx,
@@ -107,6 +111,7 @@ impl CamViewerApp {
                             let selected = self.selected_format == Some(*f);
                             if ui.selectable_label(selected, fmt_to_string(*f)).clicked() {
                                 self.last_requested = Some(*f);
+                                self.measured_fps = None;
                                 self.status =
                                     Some(format!("要求中: {} …", fmt_to_string(*f)));
                                 let _ = self.cmd_tx.send(CamCommand::Open {
@@ -117,7 +122,9 @@ impl CamViewerApp {
                         }
                     });
 
-                // 現在カメラに実際に適用されているフォーマット（ピクセル形式まで含めて表示）
+                // 現在カメラに実際に適用されているフォーマットと、別途計測した実測 FPS。
+                // カメラ申告の FPS とハードウェアの実動作が違うことが珍しくないため、
+                // 「設定値 vs 実測」を両方並べて表示する。
                 if let Some(cur) = self.selected_format {
                     ui.label(format!(
                         "現在のフォーマット: {} ({:?})",
@@ -125,6 +132,11 @@ impl CamViewerApp {
                         cur.format()
                     ));
                 }
+                let measured = self
+                    .measured_fps
+                    .map(|f| format!("{:.1} fps", f))
+                    .unwrap_or_else(|| "計測中…".to_owned());
+                ui.label(format!("実測 FPS: {}", measured));
 
                 // 全画面表示
                 let mut fs = self.fullscreen;
@@ -160,10 +172,17 @@ impl eframe::App for CamViewerApp {
                     if index == self.selected_device {
                         self.formats = formats;
                         self.selected_format = Some(current);
+                        self.measured_fps = None;
                         self.last_error = None;
                         let req = self.last_requested.take();
+                        // 解像度と FPS が一致していれば成功扱い。ピクセル形式は
+                        // nokhwa 側で勝手に切り替わることがあるが表示上は影響しない。
+                        let same_res_fps = |r: &CameraFormat| {
+                            r.resolution() == current.resolution()
+                                && r.frame_rate() == current.frame_rate()
+                        };
                         self.status = Some(match req {
-                            Some(r) if r == current => {
+                            Some(r) if same_res_fps(&r) => {
                                 format!("適用しました: {}", fmt_to_string(current))
                             }
                             Some(r) => format!(
@@ -175,6 +194,7 @@ impl eframe::App for CamViewerApp {
                         });
                     }
                 }
+                CamEvent::MeasuredFps(fps) => self.measured_fps = Some(fps),
                 CamEvent::Error(e) => self.last_error = Some(e),
             }
         }
