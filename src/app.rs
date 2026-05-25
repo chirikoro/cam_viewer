@@ -175,11 +175,14 @@ impl eframe::App for CamViewerApp {
                         self.measured_fps = None;
                         self.last_error = None;
                         let req = self.last_requested.take();
-                        // 解像度と FPS が一致していれば成功扱い。ピクセル形式は
-                        // nokhwa 側で勝手に切り替わることがあるが表示上は影響しない。
+                        // 解像度が一致 かつ FPS の差が ±2 以内なら成功扱い。
+                        // ピクセル形式は nokhwa 側で勝手に切り替わることがあり、
+                        // FPS も 29.97↔30 のように小数で揺れて整数化で 1 ずれることが
+                        // あるため、厳密一致では誤検知が出る。
                         let same_res_fps = |r: &CameraFormat| {
-                            r.resolution() == current.resolution()
-                                && r.frame_rate() == current.frame_rate()
+                            let fps_diff =
+                                (r.frame_rate() as i64 - current.frame_rate() as i64).abs();
+                            r.resolution() == current.resolution() && fps_diff <= 2
                         };
                         self.status = Some(match req {
                             Some(r) if same_res_fps(&r) => {

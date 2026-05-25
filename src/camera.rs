@@ -140,10 +140,15 @@ fn open_camera(
 
 /// 同じ (解像度, FPS) でピクセル形式違いの組合せが多数並ぶと選びにくいので、
 /// 1 組につき 1 つだけ残す。優先順位はデコード相性と高 FPS 実現性で決める。
+/// また、ドライバが申告する 1〜数 fps のような実用にならない低 FPS は除外する。
 fn dedup_and_sort_formats(formats: Vec<CameraFormat>) -> Vec<CameraFormat> {
     use std::collections::HashMap;
+    const MIN_FPS: u32 = 5;
     let mut best: HashMap<(u32, u32, u32), CameraFormat> = HashMap::new();
     for f in formats {
+        if f.frame_rate() < MIN_FPS {
+            continue;
+        }
         let key = (
             f.resolution().width(),
             f.resolution().height(),
