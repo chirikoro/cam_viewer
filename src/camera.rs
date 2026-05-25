@@ -134,7 +134,28 @@ fn open_camera(
     let formats = dedup_and_sort_formats(raw);
 
     cam.open_stream()?;
-    let current = cam.camera_format();
+    let mut current = cam.camera_format();
+
+    // nokhwa の Windows (Media Foundation) バックエンドは camera_format() の
+    // frame_rate を 0 や 1 のような壊れた値で返してくることがある（実ストリーム
+    // は正しい FPS で回っているのに申告値だけ狂う）。明らかに異常な低 FPS が
+    // 申告された場合は、要求値、もしくは列挙した中で同じ解像度の最高 FPS で
+    // 表示用の値を補正する。
+    if current.frame_rate() < 5 {
+        let fallback_fps = format
+            .map(|f| f.frame_rate())
+            .filter(|fps| *fps >= 5)
+            .or_else(|| {
+                formats
+                    .iter()
+                    .find(|f| f.resolution() == current.resolution())
+                    .map(|f| f.frame_rate())
+            });
+        if let Some(fps) = fallback_fps {
+            current = CameraFormat::new(current.resolution(), current.format(), fps);
+        }
+    }
+
     Ok((cam, formats, current))
 }
 
